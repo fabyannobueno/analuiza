@@ -1,0 +1,1 @@
+- [Ana Luiza Lash Firebase scope](ana-luiza-lash-scope.md) — no Cloud Functions or Firebase Storage; profile photos are resized to 500×500 and stored as base64 in Firestore.

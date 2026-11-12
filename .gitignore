@@ -53,3 +53,10 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+.env
+.env.*
+!.env.example
+!.env.*.example
+.firebaserc
+service-account*.json
+*-service-account*.json

@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Ana Luiza Lash"
+description = "Agendamento e gestão de atendimentos para o estúdio Ana Luiza Lash, com portal do cliente e painel administrativo protegidos por Firebase serverless."
+version = "1.0.0"
+id = "artifacts/ana-luiza-lash"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22961
+
+[services.development]
+run = "pnpm --filter @workspace/ana-luiza-lash run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ana-luiza-lash", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/ana-luiza-lash/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22961"
+BASE_PATH = "/"
