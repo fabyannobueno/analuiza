@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="300" viewBox="0 0 680 300" fill="none">
+  <title>Ana Luiza Lash</title>
+  <g stroke="#A66F85" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72 106c29-37 81-37 110 0-29 37-81 37-110 0Z" stroke-width="3"/>
+    <path d="M89 92 78 74M105 81 99 58M126 76V51M147 81l7-23M164 92l13-18" stroke-width="3"/>
+    <circle cx="127" cy="106" r="16" stroke-width="3"/>
+    <circle cx="127" cy="106" r="5" fill="#A66F85" stroke="none"/>
+    <path d="M70 154h114" stroke-width="1.5"/>
+  </g>
+  <text x="220" y="124" fill="#503343" font-family="Georgia, 'Times New Roman', serif" font-size="62" letter-spacing="2">ANA LUIZA</text>
+  <text x="224" y="169" fill="#A66F85" font-family="Arial, sans-serif" font-size="20" letter-spacing="12">LASH</text>
+</svg>

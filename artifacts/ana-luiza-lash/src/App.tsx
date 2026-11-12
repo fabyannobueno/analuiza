@@ -18,7 +18,7 @@ import {
   type PaymentStatus, type Procedure, type ProcedureInput, type SitePayload,
 } from '@/lib/api';
 import { adminAuth, firebaseReady, requireAdminAuth } from '@/lib/firebase';
-import brandLogo from '@assets/Logo_Luxuoso_Ana_Luiza_Lash_1794517014400.png';
+import brandLogo from '@/assets/brand-logo.svg';
 
 const queryClient = new QueryClient();
 
