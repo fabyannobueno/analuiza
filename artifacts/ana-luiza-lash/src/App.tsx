@@ -29,6 +29,18 @@ function errorText(error: unknown) {
 function money(cents: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
 }
+function currencyCents(value: string) {
+  return Number(value.replace(/\D/g, '') || 0);
+}
+function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(message)), milliseconds);
+    promise.then(
+      value => { window.clearTimeout(timeout); resolve(value); },
+      error => { window.clearTimeout(timeout); reject(error); },
+    );
+  });
+}
 function dateLabel(value: string, opts: Intl.DateTimeFormatOptions = {}) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', ...opts }).format(new Date(value));
 }
@@ -351,7 +363,13 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
 
   useEffect(() => {
     if (!adminAuth) { setAuthReady(true); return; }
-    return onAuthStateChanged(adminAuth, nextUser => { setUser(nextUser); setAuthReady(true); });
+    return onAuthStateChanged(adminAuth, nextUser => {
+      setUser(nextUser);
+      setHasLoadedAdmin(false);
+      setSummary(null);
+      setError('');
+      setAuthReady(true);
+    });
   }, []);
   useEffect(() => { if (site?.business && !settingsForm) setSettingsForm(site.business); }, [site]);
   async function adminToken() { if (!user) throw new Error('Sua sessão administrativa expirou. Entre novamente.'); return user.uid; }
@@ -360,15 +378,19 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
     setAdminLoading(true); setError('');
     try {
       const token = await adminToken();
-      await adminApi.bootstrapAdmin(token);
-      const [dashboard, list, procedures, settings, savedHours, savedBlocks] = await Promise.all([
-        adminApi.dashboard(token),
-        adminApi.appointments(token),
-        adminApi.procedures(token),
-        adminApi.settings(token),
-        adminApi.businessHours(token),
-        adminApi.blockedDates(token),
-      ]);
+      await withTimeout(adminApi.bootstrapAdmin(token), 20_000, 'O painel demorou para responder. Verifique a conexão e tente atualizar.');
+      const [dashboard, list, procedures, settings, savedHours, savedBlocks] = await withTimeout(
+        Promise.all([
+          adminApi.dashboard(token),
+          adminApi.appointments(token),
+          adminApi.procedures(token),
+          adminApi.settings(token),
+          adminApi.businessHours(token),
+          adminApi.blockedDates(token),
+        ]),
+        20_000,
+        'O painel demorou para responder. Verifique a conexão e tente atualizar.',
+      );
       setSummary(dashboard);
       setAppointments(list);
       setAdminProcedures(procedures);
@@ -379,9 +401,8 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
       ));
       setBlocked(savedBlocks);
       onSiteChange({ ...(site || { business: settings, procedures: [] }), business: settings, procedures: procedures.filter(item => item.active) });
-      setHasLoadedAdmin(true);
     } catch (e) { setError(errorText(e)); }
-    finally { setAdminLoading(false); }
+    finally { setAdminLoading(false); setHasLoadedAdmin(true); }
   }
   useEffect(() => { if (user && mode !== 'register' && !hasLoadedAdmin) void loadAdmin(); }, [user, mode, hasLoadedAdmin]);
   async function login(event: React.FormEvent<HTMLFormElement>) {
@@ -504,7 +525,18 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
       {summary.nextAppointments.length === 0 ? <div className="empty-admin"><CalendarDays size={20} /><span>Nenhum próximo atendimento na agenda.</span></div> : summary.nextAppointments.map(a => <AppointmentAdminRow key={a.id} appointment={a} onUpdate={updateAppointment} />)}</div></>}
     </section> : tab === 'appointments' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,26px)' }}><div className="admin-section-head"><div><div className="eyebrow">AGENDA</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 0' }}>Reservas</h2></div><label className="field" style={{ width: 185 }}>Filtrar por dia<input type="date" value={appointmentFilter} onChange={e => setAppointmentFilter(e.target.value)} /></label></div>{adminLoading ? <LoadingBlock /> : filteredAppointments.length === 0 ? <div className="empty-admin"><CalendarDays size={22} /><span>{appointmentFilter ? 'Não há reservas para este dia.' : 'Sua agenda ainda está vazia.'}</span></div> : filteredAppointments.map(a => <AppointmentAdminRow key={a.id} appointment={a} onUpdate={updateAppointment} />)}</section> :
     tab === 'procedures' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,26px)' }}><div className="admin-section-head"><div><div className="eyebrow">CARDÁPIO DE CUIDADOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 0' }}>Procedimentos</h2></div><button className="button" onClick={() => setProcedureForm({ name: '', description: '', priceCents: 0, durationMinutes: 60, active: true })}><Plus size={15} /> Novo procedimento</button></div>
-      {procedureForm && <form onSubmit={saveProcedure} className="procedure-edit"><div className="admin-section-head"><b style={{ color: '#624252' }}>{procedureForm.id ? 'Editar procedimento' : 'Novo procedimento'}</b><button type="button" className="icon-button" aria-label="Fechar formulário" onClick={() => setProcedureForm(null)}><X size={16} /></button></div><div className="edit-grid"><label className="field">Nome<input required value={procedureForm.name} onChange={e => setProcedureForm({ ...procedureForm, name: e.target.value })} /></label><label className="field">Valor (R$)<input required type="number" min="0" step="0.01" value={procedureForm.priceCents / 100} onChange={e => setProcedureForm({ ...procedureForm, priceCents: Math.round(Number(e.target.value) * 100) })} /></label><label className="field">Duração (min)<input required type="number" min="1" value={procedureForm.durationMinutes} onChange={e => setProcedureForm({ ...procedureForm, durationMinutes: Number(e.target.value) })} /></label><label className="field">Imagem (URL, opcional)<input type="url" value={procedureForm.imageUrl || ''} onChange={e => setProcedureForm({ ...procedureForm, imageUrl: e.target.value || undefined })} /></label><label className="field" style={{ gridColumn: '1/-1' }}>Descrição<textarea required value={procedureForm.description} onChange={e => setProcedureForm({ ...procedureForm, description: e.target.value })} /></label><label style={{ display: 'flex', gap: 9, alignItems: 'center', color: '#6c4d5c', fontSize: 12 }}><input type="checkbox" checked={procedureForm.active} onChange={e => setProcedureForm({ ...procedureForm, active: e.target.checked })} />Disponível para agendamento</label></div><button className="button" disabled={busy} style={{ marginTop: 16 }}>{busy ? 'Salvando…' : 'Salvar procedimento'}</button></form>}
+      {procedureForm && <form onSubmit={saveProcedure} className="procedure-edit">
+        <div className="admin-section-head"><b style={{ color: '#624252' }}>{procedureForm.id ? 'Editar procedimento' : 'Novo procedimento'}</b><button type="button" className="icon-button" aria-label="Fechar formulário" onClick={() => setProcedureForm(null)}><X size={16} /></button></div>
+        <div className="edit-grid">
+          <label className="field">Nome<input required value={procedureForm.name} onChange={e => setProcedureForm({ ...procedureForm, name: e.target.value })} /></label>
+          <label className="field">Valor (R$)<input required type="text" inputMode="numeric" autoComplete="off" value={money(procedureForm.priceCents)} onChange={e => setProcedureForm({ ...procedureForm, priceCents: currencyCents(e.target.value) })} /></label>
+          <label className="field">Duração (min)<input required type="number" min="1" value={procedureForm.durationMinutes} onChange={e => setProcedureForm({ ...procedureForm, durationMinutes: Number(e.target.value) })} /></label>
+          <label className="field">Imagem (URL, opcional)<input type="url" value={procedureForm.imageUrl || ''} onChange={e => setProcedureForm({ ...procedureForm, imageUrl: e.target.value || undefined })} /></label>
+          <label className="field" style={{ gridColumn: '1/-1' }}>Descrição<textarea required value={procedureForm.description} onChange={e => setProcedureForm({ ...procedureForm, description: e.target.value })} /></label>
+          <label style={{ display: 'flex', gap: 9, alignItems: 'center', color: '#6c4d5c', fontSize: 12 }}><input type="checkbox" checked={procedureForm.active} onChange={e => setProcedureForm({ ...procedureForm, active: e.target.checked })} />Disponível para agendamento</label>
+        </div>
+        <button className="button" disabled={busy} style={{ marginTop: 16 }}>{busy ? 'Salvando…' : 'Salvar procedimento'}</button>
+      </form>}
       {procedures.length === 0 ? <div className="empty-admin"><Scissors size={22} /><span>Nenhum procedimento carregado. Cadastre o primeiro ou recarregue o painel.</span><button className="text-link" onClick={() => void loadAdmin()}>Atualizar</button></div> : <div className="admin-procedures">{procedures.map(p => <div className="admin-procedure" key={p.id}><div><b>{p.name}</b><p>{p.description}</p><span>{money(p.priceCents)} · {p.durationMinutes} min · {p.active ? 'Ativo' : 'Inativo'}</span></div><div style={{ display: 'flex', gap: 7 }}><button className="icon-button" aria-label={`Editar ${p.name}`} onClick={() => setProcedureForm({ ...p })}><Scissors size={15} /></button><button className="icon-button" aria-label={`Remover ${p.name}`} onClick={() => void deleteProcedure(p)}><Trash2 size={15} /></button></div></div>)}</div>}</section> :
     tab === 'settings' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">IDENTIDADE E PAGAMENTOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 20px' }}>Configurações do estúdio</h2>{settingsForm ? <form onSubmit={saveSettings} className="edit-grid"><label className="field">Nome do estúdio<input required value={settingsForm.businessName} onChange={e => setSettingsForm({ ...settingsForm, businessName: e.target.value })} /></label><label className="field">WhatsApp<input required value={settingsForm.whatsapp} onChange={e => setSettingsForm({ ...settingsForm, whatsapp: e.target.value })} /></label><label className="field">Chave PIX<input required value={settingsForm.pixKey} onChange={e => setSettingsForm({ ...settingsForm, pixKey: e.target.value })} /></label><label className="field">Recebedor PIX<input required value={settingsForm.pixReceiver} onChange={e => setSettingsForm({ ...settingsForm, pixReceiver: e.target.value })} /></label><label className="field" style={{ gridColumn: '1/-1' }}>Endereço<input required value={settingsForm.address} onChange={e => setSettingsForm({ ...settingsForm, address: e.target.value })} /></label><label className="field">Fuso horário<input required value={settingsForm.timezone} onChange={e => setSettingsForm({ ...settingsForm, timezone: e.target.value })} /></label><label className="field">Sinal de reserva (R$)<input required type="number" min="0" step=".01" value={settingsForm.depositCents / 100} onChange={e => setSettingsForm({ ...settingsForm, depositCents: Math.round(Number(e.target.value) * 100) })} /></label><button className="button" disabled={busy} style={{ gridColumn: '1/-1', justifySelf: 'start' }}>{busy ? 'Salvando…' : 'Salvar configurações'} <Check size={15} /></button></form> : <div className="notice">As configurações do estúdio não foram carregadas. Verifique a conexão e tente novamente.</div>}</section> :
      <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">DISPONIBILIDADE</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 6px' }}>Horários e bloqueios</h2><p style={{ color: '#8b747e', fontSize: 11, lineHeight: 1.6 }}>Configure os períodos de atendimento e os bloqueios da agenda. As alterações são sincronizadas com as reservas online.</p>
