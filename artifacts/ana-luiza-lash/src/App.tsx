@@ -10,15 +10,14 @@ import {
   Clock3, CreditCard, Eye, EyeOff, LogOut, Menu, MessageCircle,
   Plus, Scissors, ShieldCheck, Sparkles, Trash2, UserRound, X,
 } from 'lucide-react';
-import { onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
+import { createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
 import {
-  adminApi, ApiRequestError, clientApi, isBackendConfigured, publicApi,
+  ADMIN_BOOTSTRAP_EMAIL, adminApi, ApiRequestError, clientApi, isBackendConfigured, publicApi,
   type Appointment, type AppointmentStatus, type AvailabilitySlot, type BlockedDate,
   type BusinessHours, type BusinessSettings, type ClientProfile, type DashboardSummary,
   type PaymentStatus, type Procedure, type ProcedureInput, type SitePayload,
 } from '@/lib/api';
 import { adminAuth, firebaseReady, requireAdminAuth } from '@/lib/firebase';
-import brandLogo from '@/assets/brand-logo.svg';
 
 const queryClient = new QueryClient();
 
@@ -274,10 +273,11 @@ function AuthPage({ onProfile }: { onProfile: (p: ClientProfile) => void }) {
   const titles = { login: 'Que bom ter você de volta.', register: 'Vamos nos conhecer.', recovery: 'Recupere seu acesso.', confirm: 'Confira seu WhatsApp.' };
   return <main className="auth-page" style={{ minHeight: 'calc(100dvh - 78px)', display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f2e7ea' }}>
     <div className="auth-visual" style={{ display: 'grid', alignItems: 'center', justifyItems: 'center', padding: 30, background: 'linear-gradient(145deg,#ead7df,#f5eaed)' }}>
-      <div style={{ textAlign: 'center', maxWidth: 420 }}><div className="eyebrow">UM ESPAÇO SEU</div><img src={brandLogo} alt="Ana Luiza Lash" style={{ width: 'min(100%,390px)', display: 'block', margin: '12px auto 0' }} /><p className="serif" style={{ color: '#80596c', fontSize: 24, margin: '0 auto', maxWidth: 330 }}>Seus horários e cuidados, sempre por perto.</p></div>
+      <div style={{ textAlign: 'center', maxWidth: 420 }}><div className="eyebrow">UM ESPAÇO SEU</div><img src="/favicon.svg" alt="Ana Luiza Lash" style={{ width: 'min(100%,320px)', display: 'block', margin: '12px auto 0', borderRadius: 18 }} /><p className="serif" style={{ color: '#80596c', fontSize: 24, margin: '0 auto', maxWidth: 330 }}>Seus horários e cuidados, sempre por perto.</p></div>
     </div>
     <div style={{ display: 'grid', placeItems: 'center', padding: '50px 22px', background: '#faf7f4' }}>
       <div style={{ width: 'min(100%,390px)' }}>
+        <img src="/favicon.svg" alt="Ana Luiza Lash" style={{ width: 64, height: 48, objectFit: 'contain', borderRadius: 8, marginBottom: 12 }} />
         <div className="eyebrow">ÁREA DA CLIENTE</div><h1 className="serif" style={{ fontSize: 37, lineHeight: 1.15, fontWeight: 400, color: '#503343', margin: '10px 0 8px' }}>{titles[mode]}</h1><p style={{ color: '#856e79', fontSize: 12, lineHeight: 1.65, marginBottom: 24 }}>{mode === 'login' ? 'Entre com seu WhatsApp para acompanhar suas reservas.' : mode === 'register' ? 'Crie seu acesso para reservar e acompanhar seus atendimentos.' : 'Vamos enviar as instruções para o WhatsApp cadastrado.'}</p>
         {!isBackendConfigured() && <BackendNotice />}
         {error && <div role="alert" className="notice error" style={{ marginBottom: 16 }}>{error}</div>}{message && <div className="notice success" style={{ marginBottom: 16 }}>{message}</div>}
@@ -331,7 +331,8 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [mode, setMode] = useState<'login' | 'reset'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -353,12 +354,13 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
     return onAuthStateChanged(adminAuth, nextUser => { setUser(nextUser); setAuthReady(true); });
   }, []);
   useEffect(() => { if (site?.business && !settingsForm) setSettingsForm(site.business); }, [site]);
-  async function adminToken() { if (!user) throw new Error('Sua sessão administrativa expirou. Entre novamente.'); return user.getIdToken(); }
+  async function adminToken() { if (!user) throw new Error('Sua sessão administrativa expirou. Entre novamente.'); return user.uid; }
   async function loadAdmin() {
     if (!user) return;
     setAdminLoading(true); setError('');
     try {
       const token = await adminToken();
+      await adminApi.bootstrapAdmin(token);
       const [dashboard, list, procedures, settings, savedHours, savedBlocks] = await Promise.all([
         adminApi.dashboard(token),
         adminApi.appointments(token),
@@ -381,13 +383,28 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
     } catch (e) { setError(errorText(e)); }
     finally { setAdminLoading(false); }
   }
-  useEffect(() => { if (user && !hasLoadedAdmin) void loadAdmin(); }, [user, hasLoadedAdmin]);
+  useEffect(() => { if (user && mode !== 'register' && !hasLoadedAdmin) void loadAdmin(); }, [user, mode, hasLoadedAdmin]);
   async function login(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(''); setNotice('');
     try {
       const auth = requireAdminAuth();
-      if (mode === 'reset') { await sendPasswordResetEmail(auth, loginEmail.trim()); setNotice('Se o endereço estiver cadastrado, o link para redefinir a senha foi enviado.'); }
-      else await signInWithEmailAndPassword(auth, loginEmail.trim(), loginPassword);
+      const email = loginEmail.trim().toLowerCase();
+      if (mode === 'register') {
+        if (email !== ADMIN_BOOTSTRAP_EMAIL) throw new Error(`O cadastro inicial está restrito a ${ADMIN_BOOTSTRAP_EMAIL}.`);
+        if (loginPassword !== registerConfirmPassword) throw new Error('As senhas não conferem.');
+        const credential = await createUserWithEmailAndPassword(auth, email, loginPassword);
+        await sendEmailVerification(credential.user);
+        await signOut(auth);
+        setLoginPassword('');
+        setRegisterConfirmPassword('');
+        setMode('login');
+        setNotice('Cadastro criado. Confirme o e-mail enviado antes de entrar no painel.');
+      } else if (mode === 'reset') {
+        await sendPasswordResetEmail(auth, email);
+        setNotice('Se o endereço estiver cadastrado, o link para redefinir a senha foi enviado.');
+      } else {
+        await signInWithEmailAndPassword(auth, email, loginPassword);
+      }
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   }
@@ -459,10 +476,22 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   }
   const filteredAppointments = useMemo(() => appointmentFilter ? appointments.filter(a => a.startAt.slice(0, 10) === appointmentFilter) : appointments, [appointments, appointmentFilter]);
   if (!authReady) return <main className="admin-login"><div className="surface" style={{ width: 'min(100%,430px)', padding: 30 }}><LoadingBlock rows={2} /></div></main>;
-  if (!user) return <main className="admin-login"><div className="admin-login-inner"><Link href="/" className="back-link"><ArrowLeft size={15} /> Voltar ao site</Link><div className="surface admin-login-card"><img src={brandLogo} alt="Ana Luiza Lash" style={{ width: 125, height: 80, objectFit: 'contain' }} /><div className="eyebrow" style={{ marginTop: 15 }}>ACESSO RESTRITO</div><h1 className="serif" style={{ fontSize: 34, color: '#503343', fontWeight: 400, margin: '8px 0' }}>{mode === 'login' ? 'Painel da profissional' : 'Redefinir acesso'}</h1><p style={{ fontSize: 12, color: '#826d77', lineHeight: 1.6 }}>{firebaseReady ? 'Entre com sua conta administrativa segura.' : 'O Firebase ainda não está configurado neste ambiente.'}</p>{error && <div className="notice error" role="alert">{error}</div>}{notice && <div className="notice success">{notice}</div>}
-    <form onSubmit={login} style={{ display: 'grid', gap: 14, marginTop: 19 }}><label className="field">E-mail administrativo<input required type="email" autoComplete="username" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} data-testid="input-admin-email" /></label>{mode === 'login' && <label className="field">Senha<span style={{ position: 'relative' }}><input required type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} data-testid="input-admin-password" /><button type="button" aria-label="Mostrar ou ocultar senha" onClick={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 10, top: 8, border: 0, background: 'none', color: '#805c6c' }}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>}<button className="button" disabled={busy || !firebaseReady}>{busy ? 'Aguarde…' : mode === 'login' ? 'Entrar no painel' : 'Enviar link de recuperação'}</button></form>
-    {mode === 'login' ? <button className="plain-link" style={{ marginTop: 16 }} onClick={() => { setMode('reset'); setError(''); }}>Esqueci minha senha</button> : <button className="plain-link" style={{ marginTop: 16 }} onClick={() => { setMode('login'); setError(''); }}>Voltar para entrar</button>}
-    {!firebaseReady && <div className="notice" style={{ marginTop: 17 }}>Configure as variáveis VITE_FIREBASE_* para liberar o acesso administrativo.</div>}{firebaseReady && !isBackendConfigured() && <div className="notice" style={{ marginTop: 17 }}>Configure o serviço Firebase Functions para carregar os dados do painel.</div>}
+  if (!user) return <main className="admin-login"><div className="admin-login-inner"><Link href="/" className="back-link"><ArrowLeft size={15} /> Voltar ao site</Link><div className="surface admin-login-card">
+    <img src="/favicon.svg" alt="Ana Luiza Lash" style={{ width: 96, height: 64, objectFit: 'contain', borderRadius: 10 }} />
+    <div className="eyebrow" style={{ marginTop: 15 }}>ACESSO RESTRITO</div>
+    <h1 className="serif" style={{ fontSize: 34, color: '#503343', fontWeight: 400, margin: '8px 0' }}>{mode === 'register' ? 'Criar acesso administrativo' : mode === 'reset' ? 'Redefinir acesso' : 'Painel da profissional'}</h1>
+    <p style={{ fontSize: 12, color: '#826d77', lineHeight: 1.6 }}>{mode === 'register' ? `Cadastro inicial reservado a ${ADMIN_BOOTSTRAP_EMAIL}. Você precisará confirmar esse e-mail.` : mode === 'reset' ? 'Informe o e-mail da conta para receber o link de redefinição.' : firebaseReady ? 'Entre com sua conta administrativa segura.' : 'O Firebase ainda não está configurado neste ambiente.'}</p>
+    {error && <div className="notice error" role="alert">{error}</div>}{notice && <div className="notice success" role="status">{notice}</div>}
+    <form onSubmit={login} style={{ display: 'grid', gap: 14, marginTop: 19 }}>
+      <label className="field">E-mail administrativo<input required type="email" autoComplete="username" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} data-testid="input-admin-email" /></label>
+      {mode !== 'reset' && <label className="field">Senha<span style={{ position: 'relative' }}><input required minLength={mode === 'register' ? 10 : undefined} type={showPassword ? 'text' : 'password'} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={loginPassword} onChange={e => setLoginPassword(e.target.value)} data-testid="input-admin-password" /><button type="button" aria-label="Mostrar ou ocultar senha" onClick={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 10, top: 8, border: 0, background: 'none', color: '#805c6c' }}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span>{mode === 'register' && <small style={{ color: '#927c86', fontWeight: 400 }}>Use pelo menos 10 caracteres.</small>}</label>}
+      {mode === 'register' && <label className="field">Confirme a senha<input required minLength={10} type="password" autoComplete="new-password" value={registerConfirmPassword} onChange={e => setRegisterConfirmPassword(e.target.value)} data-testid="input-admin-confirm-password" /></label>}
+      <button className="button" type="submit" disabled={busy || !firebaseReady}>{busy ? 'Aguarde…' : mode === 'register' ? 'Criar cadastro admin' : mode === 'login' ? 'Entrar no painel' : 'Enviar link de recuperação'}</button>
+    </form>
+    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginTop: 16, fontSize: 11 }}>
+      {mode === 'login' ? <><button className="plain-link" onClick={() => { setMode('reset'); setError(''); setNotice(''); }}>Esqueci minha senha</button><button className="plain-link" onClick={() => { setMode('register'); setError(''); setNotice(''); }}>Criar cadastro admin</button></> : <button className="plain-link" onClick={() => { setMode('login'); setError(''); setNotice(''); }}>Voltar para entrar</button>}
+    </div>
+    {!firebaseReady && <div className="notice" style={{ marginTop: 17 }}>Configure as variáveis VITE_FIREBASE_* para liberar o cadastro e o acesso administrativo.</div>}
   </div></div><style>{`.admin-login{min-height:calc(100dvh - 78px);display:grid;place-items:center;padding:30px 18px;background:linear-gradient(135deg,#f1e4e8,#faf7f4)}.admin-login-inner{width:min(100%,460px)}.admin-login-card{padding:clamp(23px,5vw,40px)}.admin-login-card .field input{background:#fff}`}</style></main>;
   const procedures = adminProcedures;
   return <main className="shell" style={{ minHeight: '75vh', paddingBlock: 36 }}>

@@ -162,6 +162,8 @@ export class ApiRequestError extends Error {
   }
 }
 
+export const ADMIN_BOOTSTRAP_EMAIL = "fabyannobueno@gmail.com";
+
 function firestoreError(error: unknown): ApiRequestError {
   const code =
     typeof error === "object" && error !== null && "code" in error
@@ -735,6 +737,43 @@ export const clientApi = {
 };
 
 export const adminApi = {
+  async bootstrapAdmin(uid: string): Promise<void> {
+    const auth = requireAdminAuth();
+    const user = auth.currentUser;
+    if (!user || user.uid !== uid) {
+      throw new ApiRequestError("Entre no painel administrativo.", 401);
+    }
+
+    const adminRef = doc(requireFirestore(), "admins", uid);
+    const existing = await getDoc(adminRef);
+    if (existing.exists()) {
+      if (existing.data().active !== true) {
+        throw new ApiRequestError("Esta conta administrativa está desativada.", 403);
+      }
+      return;
+    }
+
+    if (user.email?.toLowerCase() !== ADMIN_BOOTSTRAP_EMAIL) return;
+    await user.reload();
+    await user.getIdToken(true);
+    if (!user.emailVerified) {
+      throw new ApiRequestError(
+        "Confirme o e-mail antes de ativar o acesso administrativo.",
+        403,
+      );
+    }
+
+    try {
+      await setDoc(adminRef, {
+        email: ADMIN_BOOTSTRAP_EMAIL,
+        active: true,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      throw firestoreError(error);
+    }
+  },
+
   async dashboard(uid: string): Promise<DashboardSummary> {
     await requireAdmin(uid);
     const database = requireFirestore();

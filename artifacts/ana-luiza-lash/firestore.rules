@@ -16,6 +16,20 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
     }
 
+    function isFirstAdmin(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email == 'fabyannobueno@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function validFirstAdminDocument() {
+      return request.resource.data.keys().hasOnly(['email', 'active', 'createdAt'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.active == true
+        && request.resource.data.createdAt == request.time;
+    }
+
     function validPhoto(photo) {
       return photo is string
         && photo.size() <= 650000
@@ -133,7 +147,8 @@ service cloud.firestore {
     match /admins/{uid} {
       allow get: if isSelf(uid) || isAdmin();
       allow list: if isAdmin();
-      allow create, update, delete: if false;
+      allow create: if isFirstAdmin(uid) && validFirstAdminDocument();
+      allow update, delete: if false;
     }
 
     match /clients/{uid} {
