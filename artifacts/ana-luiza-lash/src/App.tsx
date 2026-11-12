@@ -76,7 +76,11 @@ function Header({ profile }: { profile: ClientProfile | null }) {
   return <header style={{ position: 'sticky', top: 0, zIndex: 20, background: 'rgba(249,246,243,.93)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #eadfe2' }}>
     <div className="shell" style={{ height: 78, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
       <Link href="/" aria-label="Ana Luiza Lash, página inicial" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}>
-        <img src={brandLogo} alt="Ana Luiza Lash" style={{ width: 120, height: 66, objectFit: 'contain' }} />
+        <img src="/favicon.svg" alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 9 }} />
+        <span style={{ display: 'grid', gap: 1, marginLeft: 10 }}>
+          <span className="serif" style={{ color: '#503343', fontSize: 18, lineHeight: 1.1 }}>Ana Luiza</span>
+          <span style={{ color: '#A66F85', fontSize: 8, letterSpacing: '.24em' }}>LASH</span>
+        </span>
       </Link>
       <button className="icon-button" aria-label={open ? 'Fechar menu' : 'Abrir menu'} onClick={() => setOpen(!open)} style={{ display: 'none' }} data-testid="button-mobile-menu"><Menu size={19} /></button>
       <nav className={`main-nav ${open ? 'open' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 27 }}>
@@ -92,9 +96,12 @@ function Header({ profile }: { profile: ClientProfile | null }) {
 function Footer({ site }: { site: SitePayload | null }) {
   return <footer style={{ background: '#472f3b', color: '#f7ecef', padding: '45px 0 28px' }}>
     <div className="shell" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 26, alignItems: 'center' }}>
-      <div>
-        <div className="serif" style={{ fontSize: 25 }}>Um cuidado que começa no olhar.</div>
-        <p style={{ fontSize: 12, opacity: .72, margin: '8px 0 0' }}>{site?.business.address || 'Atendimento com hora marcada'}</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <img src="/favicon.svg" alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 9, flex: '0 0 auto' }} />
+        <div>
+          <div className="serif" style={{ fontSize: 25 }}>Um cuidado que começa no olhar.</div>
+          <p style={{ fontSize: 12, opacity: .72, margin: '8px 0 0' }}>{site?.business.address || 'Atendimento com hora marcada'}</p>
+        </div>
       </div>
       <Link href="/agendar" className="button" style={{ background: '#c08da1', color: '#442d38' }}>Escolher meu horário <ArrowRight size={15} /></Link>
     </div>
@@ -126,7 +133,7 @@ function PublicHome({ site, procedures, loading, error }: { site: SitePayload | 
         </div>
         <div className="hero-art reveal delay-2" aria-label="Logo Ana Luiza Lash" style={{ minHeight: 490, display: 'grid', placeItems: 'center', position: 'relative' }}>
           <div style={{ position: 'absolute', width: 'min(36vw,460px)', height: 'min(36vw,460px)', minWidth: 280, minHeight: 280, borderRadius: '50%', background: 'radial-gradient(circle,#fffaf9 0%,#f5e7eb 63%,rgba(226,197,207,.22) 64%,transparent 65%)', boxShadow: '0 28px 70px rgba(104,60,79,.08)' }} />
-          <img src={brandLogo} alt="Logo Ana Luiza Lash, símbolo e nome da marca" style={{ position: 'relative', zIndex: 1, width: 'min(87%,500px)', maxHeight: 410, objectFit: 'contain', filter: 'drop-shadow(0 16px 14px rgba(80,45,63,.12))' }} />
+          <img src="/favicon.svg" alt="Símbolo Ana Luiza Lash" style={{ position: 'relative', zIndex: 1, width: 'min(62%,300px)', maxHeight: 300, objectFit: 'contain', borderRadius: 28, filter: 'drop-shadow(0 16px 14px rgba(80,45,63,.12))' }} />
           <div style={{ position: 'absolute', right: 6, bottom: 52, padding: '14px 17px', background: '#fffaf7', color: '#805669', boxShadow: '0 9px 30px rgba(80,45,63,.08)', fontSize: 10, letterSpacing: '.14em', transform: 'rotate(-4deg)' }}>ATENDIMENTO<br /><b style={{ fontSize: 12, letterSpacing: '.04em' }}>feito para você</b></div>
         </div>
       </div>

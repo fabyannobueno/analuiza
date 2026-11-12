@@ -16,6 +16,7 @@ import {
   getCountFromServer,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
   runTransaction,
@@ -843,11 +844,13 @@ export const adminApi = {
       if (!appointment.exists()) {
         throw new ApiRequestError("Agendamento não encontrado.", 404);
       }
-      const locks = await transaction.get(
-        query(
-          collection(database, "availabilityLocks"),
-          where("appointmentId", "==", appointmentId),
-        ),
+      const lockRefs = Array.isArray(appointment.data().lockIds)
+        ? (appointment.data().lockIds as string[]).map((lockId) =>
+            doc(database, "availabilityLocks", lockId),
+          )
+        : [];
+      const locks = await Promise.all(
+        lockRefs.map((lockRef) => transaction.get(lockRef)),
       );
       const update: Record<string, unknown> = {
         status,
@@ -855,7 +858,8 @@ export const adminApi = {
       };
       if (paymentStatus) update.paymentStatus = paymentStatus;
       transaction.update(appointmentRef, update);
-      for (const lock of locks.docs) {
+      for (const lock of locks) {
+        if (!lock.exists()) continue;
         if (status === "cancelled") {
           transaction.delete(lock.ref);
         } else if (status === "confirmed") {
