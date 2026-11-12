@@ -1,5 +1,6 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
+import { getFirestore, type Firestore } from "firebase/firestore";
 
 const config: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -21,6 +22,7 @@ const app = hasFirebaseConfig
   : null;
 
 export const adminAuth: Auth | null = app ? getAuth(app) : null;
+export const firestore: Firestore | null = app ? getFirestore(app) : null;
 export const firebaseReady = Boolean(adminAuth);
 
 export function requireAdminAuth(): Auth {
@@ -30,4 +32,13 @@ export function requireAdminAuth(): Auth {
     );
   }
   return adminAuth;
+}
+
+export function requireFirestore(): Firestore {
+  if (!firestore) {
+    throw new Error(
+      "Configure as variáveis VITE_FIREBASE_* antes de conectar ao Firestore.",
+    );
+  }
+  return firestore;
 }

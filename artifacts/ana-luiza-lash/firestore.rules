@@ -1,8 +1,202 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // All reads and writes go through the Firebase Admin SDK in Cloud Functions.
-    // No browser client may access private records directly.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
+
+    function validPhoto(photo) {
+      return photo is string
+        && photo.size() <= 650000
+        && (photo == '' || photo.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]*$'));
+    }
+
+    function validClientCreate(uid) {
+      return request.resource.data.keys().hasOnly([
+          'uid',
+          'firstName',
+          'lastName',
+          'whatsapp',
+          'photoBase64',
+          'termsAcceptedAt',
+          'termsVersion',
+          'createdAt',
+          'updatedAt',
+          'active'
+        ])
+        && request.resource.data.uid == uid
+        && request.resource.data.firstName is string
+        && request.resource.data.firstName.size() >= 1
+        && request.resource.data.firstName.size() <= 80
+        && request.resource.data.lastName is string
+        && request.resource.data.lastName.size() <= 100
+        && request.resource.data.whatsapp is string
+        && request.resource.data.whatsapp.matches('^\\([0-9]{2}\\) [0-9]{4,5}-[0-9]{4}$')
+        && validPhoto(request.resource.data.photoBase64)
+        && request.resource.data.termsAcceptedAt == request.time
+        && request.resource.data.termsVersion is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.active == true;
+    }
+
+    function appointmentPath(appointmentId) {
+      return /databases/$(database)/documents/appointments/$(appointmentId);
+    }
+
+    function lockPath(lockId) {
+      return /databases/$(database)/documents/availabilityLocks/$(lockId);
+    }
+
+    function validClientLock(lockId) {
+      let appointmentId = request.resource.data.appointmentId;
+      let appointmentAfter = getAfter(appointmentPath(appointmentId));
+      return signedIn()
+        && request.resource.data.keys().hasOnly([
+          'kind',
+          'appointmentId',
+          'dateKey',
+          'slotEpoch',
+          'expiresAt'
+        ])
+        && request.resource.data.kind == 'appointment'
+        && request.resource.data.dateKey is string
+        && request.resource.data.slotEpoch is int
+        && request.resource.data.expiresAt is timestamp
+        && existsAfter(appointmentPath(appointmentId))
+        && appointmentAfter.data.clientId == request.auth.uid
+        && appointmentAfter.data.lockIds.hasAny([lockId]);
+    }
+
+    function validAppointmentCreate(appointmentId) {
+      let data = request.resource.data;
+      let servicePath = /databases/$(database)/documents/procedures/$(data.procedureId);
+      let firstLock = data.lockIds[0];
+      return signedIn()
+        && data.keys().hasOnly([
+          'clientId',
+          'clientName',
+          'clientWhatsapp',
+          'procedureId',
+          'procedureName',
+          'priceCents',
+          'depositCents',
+          'remainingCents',
+          'startAt',
+          'endAt',
+          'status',
+          'paymentStatus',
+          'createdAt',
+          'expiresAt',
+          'lockIds'
+        ])
+        && data.clientId == request.auth.uid
+        && exists(/databases/$(database)/documents/clients/$(request.auth.uid))
+        && data.lockIds is list
+        && data.lockIds.size() >= 1
+        && data.lockIds.size() <= 40
+        && data.lockIds[0] is string
+        && existsAfter(lockPath(firstLock))
+        && getAfter(lockPath(firstLock)).data.appointmentId == appointmentId
+        && data.procedureId is string
+        && exists(servicePath)
+        && get(servicePath).data.active == true
+        && data.procedureName == get(servicePath).data.name
+        && data.priceCents == get(servicePath).data.priceCents
+        && data.depositCents is int
+        && data.depositCents >= 0
+        && data.depositCents <= data.priceCents
+        && data.remainingCents == data.priceCents - data.depositCents
+        && data.clientName is string
+        && data.clientWhatsapp is string
+        && data.startAt is timestamp
+        && data.startAt > request.time
+        && data.endAt is timestamp
+        && data.endAt > data.startAt
+        && data.status == 'pending_payment'
+        && data.paymentStatus == 'pending'
+        && data.createdAt == request.time
+        && data.expiresAt is timestamp;
+    }
+
+    match /admins/{uid} {
+      allow get: if isSelf(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /clients/{uid} {
+      allow get: if isSelf(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isSelf(uid) && validClientCreate(uid);
+      allow update: if isAdmin()
+        || (
+          isSelf(uid)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['firstName', 'lastName', 'photoBase64', 'updatedAt'])
+          && request.resource.data.firstName is string
+          && request.resource.data.firstName.size() >= 1
+          && request.resource.data.firstName.size() <= 80
+          && request.resource.data.lastName is string
+          && request.resource.data.lastName.size() <= 100
+          && validPhoto(request.resource.data.photoBase64)
+          && request.resource.data.updatedAt == request.time
+        );
+      allow delete: if false;
+    }
+
+    match /procedures/{procedureId} {
+      allow get, list: if isAdmin() || resource.data.active == true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /settings/{settingsId} {
+      allow get: if isAdmin() || settingsId == 'public';
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /businessHours/{dayId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /availabilityLocks/{lockId} {
+      // Contains only busy-slot metadata, never client names or phone numbers.
+      allow get, list: if true;
+      allow create: if isAdmin() || validClientLock(lockId);
+      allow update: if isAdmin()
+        || (
+          'expiresAt' in resource.data
+          && resource.data.expiresAt is timestamp
+          && resource.data.expiresAt <= request.time
+          && validClientLock(lockId)
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.clientId == request.auth.uid);
+      allow create: if validAppointmentCreate(appointmentId);
+      allow update, delete: if isAdmin();
+    }
+
+    match /blockedDates/{blockId} {
+      allow get, list, create, update, delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
