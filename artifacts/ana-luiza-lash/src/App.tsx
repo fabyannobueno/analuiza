@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -360,6 +360,7 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   const [blockForm, setBlockForm] = useState({ startAt: '', endAt: '', reason: '' });
   const [appointmentFilter, setAppointmentFilter] = useState('');
   const [hasLoadedAdmin, setHasLoadedAdmin] = useState(false);
+  const adminLoadInFlight = useRef(false);
 
   useEffect(() => {
     if (!adminAuth) { setAuthReady(true); return; }
@@ -374,7 +375,8 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   useEffect(() => { if (site?.business && !settingsForm) setSettingsForm(site.business); }, [site]);
   async function adminToken() { if (!user) throw new Error('Sua sessão administrativa expirou. Entre novamente.'); return user.uid; }
   async function loadAdmin() {
-    if (!user) return;
+    if (!user || adminLoadInFlight.current) return;
+    adminLoadInFlight.current = true;
     setAdminLoading(true); setError('');
     try {
       const token = await adminToken();
@@ -402,7 +404,11 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
       setBlocked(savedBlocks);
       onSiteChange({ ...(site || { business: settings, procedures: [] }), business: settings, procedures: procedures.filter(item => item.active) });
     } catch (e) { setError(errorText(e)); }
-    finally { setAdminLoading(false); setHasLoadedAdmin(true); }
+    finally {
+      adminLoadInFlight.current = false;
+      setAdminLoading(false);
+      setHasLoadedAdmin(true);
+    }
   }
   useEffect(() => { if (user && mode !== 'register' && !hasLoadedAdmin) void loadAdmin(); }, [user, mode, hasLoadedAdmin]);
   async function login(event: React.FormEvent<HTMLFormElement>) {
@@ -586,7 +592,7 @@ function Router() {
     <Route path="/agendar" component={() => !sessionChecked && isBackendConfigured() ? <main className="shell" style={{ paddingBlock: 60 }}><LoadingBlock /></main> : <><BookingPage procedures={procedures} site={site} profile={client} loading={publicLoading} publicError={publicError} /><Footer site={site} /></>} />
     <Route path="/entrar" component={() => <><AuthPage onProfile={setProfile} /><Footer site={site} /></>} />
     <Route path="/minha-conta" component={() => !sessionChecked && isBackendConfigured() ? <main className="shell" style={{ paddingBlock: 60 }}><LoadingBlock /></main> : <><AccountPage profile={client} onProfile={setProfile} /><Footer site={site} /></>} />
-    <Route path="/admin" component={() => <><AdminPage site={site} onSiteChange={setSite} /><Footer site={site} /></>} />
+    <Route path="/admin"><><AdminPage site={site} onSiteChange={setSite} /><Footer site={site} /></></Route>
     <Route component={NotFound} />
   </Switch></RoutedErrorBoundary>;
 }
