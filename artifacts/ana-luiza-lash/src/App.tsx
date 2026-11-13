@@ -16,7 +16,7 @@ import {
   PROCEDURE_IMAGE_MAX_DATA_URL_CHARS, PROCEDURE_IMAGE_MAX_FILE_BYTES, publicApi,
   type Appointment, type AppointmentStatus, type AvailabilitySlot, type BlockedDate,
   type BusinessHours, type BusinessSettings, type ClientProfile, type DashboardSummary,
-  type PaymentStatus, type Procedure, type ProcedureInput, type SitePayload,
+  type PaymentStatus, type PixKeyType, type Procedure, type ProcedureInput, type SitePayload,
 } from '@/lib/api';
 import { adminAuth, firebaseReady, requireAdminAuth } from '@/lib/firebase';
 
@@ -106,6 +106,55 @@ function maskWhatsApp(value: string) {
   return digits.length > 10
     ? `${area}${local.slice(0, 5)}${local.length > 5 ? `-${local.slice(5)}` : ''}`
     : `${area}${local.slice(0, 4)}${local.length > 4 ? `-${local.slice(4)}` : ''}`;
+}
+function maskDigitsByPattern(value: string, pattern: string) {
+  const digits = value.replace(/\D/g, '');
+  let digitIndex = 0;
+  let result = '';
+  for (const character of pattern) {
+    if (character === '0') {
+      if (digitIndex >= digits.length) break;
+      result += digits[digitIndex++];
+    } else if (digitIndex < digits.length) {
+      result += character;
+    }
+  }
+  return result;
+}
+function pixPhoneDigits(value: string) {
+  const digits = value.replace(/\D/g, '');
+  const hasCountryCode = value.trim().startsWith('+55') || (digits.startsWith('55') && digits.length > 11);
+  return (hasCountryCode ? digits.slice(2) : digits).slice(0, 11);
+}
+function maskPixPhone(value: string) {
+  const digits = pixPhoneDigits(value);
+  if (!digits) return '';
+  const area = digits.slice(0, 2);
+  if (digits.length <= 2) return `+55 (${area}${digits.length === 2 ? ')' : ''}`;
+  const local = digits.slice(2);
+  const groupSize = digits.length > 10 ? 5 : 4;
+  return `+55 (${area}) ${local.slice(0, groupSize)}${local.length > groupSize ? `-${local.slice(groupSize)}` : ''}`;
+}
+function maskPixKey(value: string, type: PixKeyType) {
+  switch (type) {
+    case 'cpf': return maskDigitsByPattern(value, '000.000.000-00');
+    case 'cnpj': return maskDigitsByPattern(value, '00.000.000/0000-00');
+    case 'phone': return maskPixPhone(value);
+    case 'email': return value.trim().toLowerCase();
+    default: return value;
+  }
+}
+function businessSettingsError(settings: BusinessSettings) {
+  const whatsapp = settings.whatsapp.replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+  if (whatsapp.length !== 10 && whatsapp.length !== 11) return 'Informe um WhatsApp válido com DDD.';
+  const key = settings.pixKey.trim();
+  if (!key) return 'Informe a chave PIX.';
+  const digits = key.replace(/\D/g, '');
+  if (settings.pixKeyType === 'cpf' && digits.length !== 11) return 'Informe um CPF com 11 dígitos.';
+  if (settings.pixKeyType === 'cnpj' && digits.length !== 14) return 'Informe um CNPJ com 14 dígitos.';
+  if (settings.pixKeyType === 'phone' && pixPhoneDigits(key).length !== 10 && pixPhoneDigits(key).length !== 11) return 'Informe um celular PIX válido com DDD.';
+  if (settings.pixKeyType === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) return 'Informe um e-mail válido para a chave PIX.';
+  return '';
 }
 function statusLabel(status: AppointmentStatus) {
   const labels: Record<AppointmentStatus, string> = {
@@ -542,6 +591,8 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   }
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!settingsForm) return;
+    const validationError = businessSettingsError(settingsForm);
+    if (validationError) { setError(validationError); setNotice(''); return; }
     setBusy(true); setError(''); setNotice('');
     try { const saved = await adminApi.saveSettings(await adminToken(), settingsForm); onSiteChange({ ...(site || { business: saved, procedures: [] }), business: saved }); setNotice('Configurações salvas.'); }
     catch (e) { setError(errorText(e)); }
@@ -610,7 +661,19 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
         <button className="button" disabled={busy || procedureImageBusy} style={{ marginTop: 16 }}>{procedureImageBusy ? 'Preparando imagem…' : busy ? 'Salvando…' : 'Salvar procedimento'}</button>
       </form>}
       {procedures.length === 0 ? <div className="empty-admin"><Scissors size={22} /><span>Nenhum procedimento carregado. Cadastre o primeiro ou recarregue o painel.</span><button className="text-link" onClick={() => void loadAdmin()}>Atualizar</button></div> : <div className="admin-procedures">{procedures.map(p => <div className="admin-procedure" key={p.id}><div><b>{p.name}</b><p>{p.description}</p><span>{money(p.priceCents)} · {p.durationMinutes} min · {p.active ? 'Ativo' : 'Inativo'}</span></div><div style={{ display: 'flex', gap: 7 }}><button className="icon-button" aria-label={`Editar ${p.name}`} disabled={procedureImageBusy} onClick={() => setProcedureForm({ ...p })}><Scissors size={15} /></button><button className="icon-button" aria-label={`Remover ${p.name}`} onClick={() => void deleteProcedure(p)}><Trash2 size={15} /></button></div></div>)}</div>}</section> :
-    tab === 'settings' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">IDENTIDADE E PAGAMENTOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 20px' }}>Configurações do estúdio</h2>{settingsForm ? <form onSubmit={saveSettings} className="edit-grid"><label className="field">Nome do estúdio<input required value={settingsForm.businessName} onChange={e => setSettingsForm({ ...settingsForm, businessName: e.target.value })} /></label><label className="field">WhatsApp<input required value={settingsForm.whatsapp} onChange={e => setSettingsForm({ ...settingsForm, whatsapp: e.target.value })} /></label><label className="field">Chave PIX<input required value={settingsForm.pixKey} onChange={e => setSettingsForm({ ...settingsForm, pixKey: e.target.value })} /></label><label className="field">Recebedor PIX<input required value={settingsForm.pixReceiver} onChange={e => setSettingsForm({ ...settingsForm, pixReceiver: e.target.value })} /></label><label className="field" style={{ gridColumn: '1/-1' }}>Endereço<input required value={settingsForm.address} onChange={e => setSettingsForm({ ...settingsForm, address: e.target.value })} /></label><label className="field">Fuso horário<input required value={settingsForm.timezone} onChange={e => setSettingsForm({ ...settingsForm, timezone: e.target.value })} /></label><label className="field">Sinal de reserva (R$)<input required type="number" min="0" step=".01" value={settingsForm.depositCents / 100} onChange={e => setSettingsForm({ ...settingsForm, depositCents: Math.round(Number(e.target.value) * 100) })} /></label><button className="button" disabled={busy} style={{ gridColumn: '1/-1', justifySelf: 'start' }}>{busy ? 'Salvando…' : 'Salvar configurações'} <Check size={15} /></button></form> : <div className="notice">As configurações do estúdio não foram carregadas. Verifique a conexão e tente novamente.</div>}</section> :
+    tab === 'settings' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">IDENTIDADE E PAGAMENTOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 20px' }}>Configurações do estúdio</h2>{settingsForm ? <form onSubmit={saveSettings} className="edit-grid">
+      <label className="field">Nome do estúdio<input required value={settingsForm.businessName} onChange={e => setSettingsForm({ ...settingsForm, businessName: e.target.value })} /></label>
+      <label className="field">WhatsApp<input required type="tel" inputMode="tel" placeholder="(11) 99999-9999" value={maskWhatsApp(settingsForm.whatsapp)} onChange={e => setSettingsForm({ ...settingsForm, whatsapp: maskWhatsApp(e.target.value) })} /></label>
+      <label className="field">Tipo da chave PIX<select required value={settingsForm.pixKeyType} onChange={e => { const pixKeyType = e.target.value as PixKeyType; setSettingsForm({ ...settingsForm, pixKeyType, pixKey: maskPixKey(settingsForm.pixKey, pixKeyType) }); }}>
+        <option value="cpf">CPF</option><option value="cnpj">CNPJ</option><option value="phone">Celular</option><option value="email">E-mail</option><option value="random">Chave aleatória</option>
+      </select></label>
+      <label className="field">Chave PIX ({({ cpf: 'CPF', cnpj: 'CNPJ', phone: 'celular', email: 'e-mail', random: 'aleatória' })[settingsForm.pixKeyType]})<input required type={settingsForm.pixKeyType === 'email' ? 'email' : 'text'} inputMode={settingsForm.pixKeyType === 'cpf' || settingsForm.pixKeyType === 'cnpj' || settingsForm.pixKeyType === 'phone' ? 'numeric' : undefined} placeholder={({ cpf: '000.000.000-00', cnpj: '00.000.000/0000-00', phone: '+55 (11) 99999-9999', email: 'nome@exemplo.com', random: 'Informe a chave aleatória' })[settingsForm.pixKeyType]} value={settingsForm.pixKey} onChange={e => setSettingsForm({ ...settingsForm, pixKey: maskPixKey(e.target.value, settingsForm.pixKeyType) })} /></label>
+      <label className="field">Recebedor PIX<input required value={settingsForm.pixReceiver} onChange={e => setSettingsForm({ ...settingsForm, pixReceiver: e.target.value })} /></label>
+      <label className="field" style={{ gridColumn: '1/-1' }}>Endereço<input required value={settingsForm.address} onChange={e => setSettingsForm({ ...settingsForm, address: e.target.value })} /></label>
+      <label className="field">Fuso horário<input required value={settingsForm.timezone} onChange={e => setSettingsForm({ ...settingsForm, timezone: e.target.value })} /></label>
+      <label className="field">Sinal de reserva (R$)<input required type="number" min="0" step=".01" value={settingsForm.depositCents / 100} onChange={e => setSettingsForm({ ...settingsForm, depositCents: Math.round(Number(e.target.value) * 100) })} /></label>
+      <button className="button" disabled={busy} style={{ gridColumn: '1/-1', justifySelf: 'start' }}>{busy ? 'Salvando…' : 'Salvar configurações'} <Check size={15} /></button>
+    </form> : <div className="notice">As configurações do estúdio não foram carregadas. Verifique a conexão e tente novamente.</div>}</section> :
      <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">DISPONIBILIDADE</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 6px' }}>Horários e bloqueios</h2><p style={{ color: '#8b747e', fontSize: 11, lineHeight: 1.6 }}>Configure os períodos de atendimento e os bloqueios da agenda. As alterações são sincronizadas com as reservas online.</p>
       <div className="hours-list">{hours.map((day, index) => <div className="hours-row" key={day.dayId}><label style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 150, fontSize: 12, color: '#684957' }}><input type="checkbox" checked={day.enabled} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, enabled: e.target.checked } : item))} />{dayNames[index][1]}</label>{day.enabled ? <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input aria-label={`Início ${dayNames[index][1]}`} type="time" value={day.periods[0]?.start || '09:00'} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, periods: [{ ...item.periods[0], start: e.target.value, end: item.periods[0]?.end || '17:00' }] } : item))} /><span>até</span><input aria-label={`Fim ${dayNames[index][1]}`} type="time" value={day.periods[0]?.end || '17:00'} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, periods: [{ ...item.periods[0], start: item.periods[0]?.start || '09:00', end: e.target.value }] } : item))} /></div> : <span style={{ color: '#aa969e', fontSize: 11 }}>Fechado</span>}</div>)}</div>
       <button className="button" onClick={() => void saveHours()} disabled={busy} style={{ marginTop: 16 }}>{busy ? 'Salvando…' : 'Salvar horários'} <Check size={15} /></button>

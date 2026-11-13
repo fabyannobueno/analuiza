@@ -38,9 +38,12 @@ export type Procedure = {
   active: boolean;
 };
 
+export type PixKeyType = "cpf" | "cnpj" | "phone" | "email" | "random";
+
 export type BusinessSettings = {
   businessName: string;
   whatsapp: string;
+  pixKeyType: PixKeyType;
   pixKey: string;
   pixReceiver: string;
   address: string;
@@ -146,6 +149,7 @@ const DAY_IDS = [
 const DEFAULT_BUSINESS: BusinessSettings = {
   businessName: "Ana Luiza Lash",
   whatsapp: "",
+  pixKeyType: "random",
   pixKey: "",
   pixReceiver: "",
   address: "",
@@ -299,7 +303,14 @@ export function isBackendConfigured(): boolean {
 
 async function readBusinessSettings(): Promise<BusinessSettings> {
   const settings = await getDoc(doc(requireFirestore(), "settings", "public"));
-  return { ...DEFAULT_BUSINESS, ...(settings.data() ?? {}) };
+  const saved = settings.data() ?? {};
+  const value = saved.pixKeyType;
+  const pixKeyType: PixKeyType =
+    value === "cpf" || value === "cnpj" || value === "phone" ||
+    value === "email" || value === "random"
+      ? value
+      : DEFAULT_BUSINESS.pixKeyType;
+  return { ...DEFAULT_BUSINESS, ...saved, pixKeyType };
 }
 
 function dayIdForDate(date: string): string {
@@ -565,10 +576,22 @@ export const clientApi = {
     } catch (error) {
       throw firestoreError(error);
     }
-    const profile = await getDoc(doc(requireFirestore(), "clients", user.uid));
-    if (!profile.exists() || profile.data().active === false) {
+    const profile = await getDoc(doc(requireFirestore(), "clients", user.uid)).catch(
+      async (error) => {
+        await signOut(auth).catch(() => undefined);
+        throw firestoreError(error);
+      },
+    );
+    if (!profile.exists()) {
       await signOut(auth);
-      throw new ApiRequestError("Telefone ou senha inválidos.", 401);
+      throw new ApiRequestError(
+        "A senha foi aceita, mas o cadastro do cliente não foi encontrado. Confira se o cadastro foi concluído e as regras do Firestore.",
+        404,
+      );
+    }
+    if (profile.data().active === false) {
+      await signOut(auth);
+      throw new ApiRequestError("Esta conta de cliente está desativada.", 403);
     }
     return profileFromData(profile.id, profile.data());
   },
@@ -983,6 +1006,43 @@ export const adminApi = {
     settings: BusinessSettings,
   ): Promise<BusinessSettings> {
     await requireAdmin(uid);
+    const whatsappDigits = settings.whatsapp
+      .replace(/\D/g, "")
+      .replace(/^55(?=\d{10,11}$)/, "");
+    if (![10, 11].includes(whatsappDigits.length)) {
+      throw new ApiRequestError("Informe um WhatsApp válido com DDD.", 400);
+    }
+    if (!settings.pixKey.trim()) {
+      throw new ApiRequestError("Informe a chave PIX.", 400);
+    }
+    const pixDigits = settings.pixKey.replace(/\D/g, "");
+    if (
+      (settings.pixKeyType === "cpf" && pixDigits.length !== 11) ||
+      (settings.pixKeyType === "cnpj" && pixDigits.length !== 14)
+    ) {
+      throw new ApiRequestError(
+        settings.pixKeyType === "cpf"
+          ? "Informe um CPF com 11 dígitos."
+          : "Informe um CNPJ com 14 dígitos.",
+        400,
+      );
+    }
+    if (
+      settings.pixKeyType === "phone" &&
+      ![10, 11].includes(
+        pixDigits.startsWith("55") && pixDigits.length > 11
+          ? pixDigits.length - 2
+          : pixDigits.length,
+      )
+    ) {
+      throw new ApiRequestError("Informe um celular PIX válido com DDD.", 400);
+    }
+    if (
+      settings.pixKeyType === "email" &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.pixKey.trim())
+    ) {
+      throw new ApiRequestError("Informe um e-mail válido para a chave PIX.", 400);
+    }
     try {
       new Intl.DateTimeFormat("pt-BR", { timeZone: settings.timezone });
     } catch {
