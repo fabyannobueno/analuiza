@@ -36,6 +36,24 @@ service cloud.firestore {
         && (photo == '' || photo.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]*$'));
     }
 
+    function validProcedureImage() {
+      return !('imageUrl' in request.resource.data)
+        || (
+          request.resource.data.imageUrl is string
+          && request.resource.data.imageUrl.size() <= 650000
+          && (
+            !request.resource.data.imageUrl.matches('^data:.*$')
+            || request.resource.data.imageUrl.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]*$')
+          )
+        );
+    }
+
+    function validProcedureData() {
+      return request.resource.data.durationMinutes is int
+        && request.resource.data.durationMinutes >= 1
+        && validProcedureImage();
+    }
+
     function validClientCreate(uid) {
       return request.resource.data.keys().hasOnly([
           'uid',
@@ -173,7 +191,8 @@ service cloud.firestore {
 
     match /procedures/{procedureId} {
       allow get, list: if isAdmin() || resource.data.active == true;
-      allow create, update, delete: if isAdmin();
+      allow create, update: if isAdmin() && validProcedureData();
+      allow delete: if isAdmin();
     }
 
     match /settings/{settingsId} {

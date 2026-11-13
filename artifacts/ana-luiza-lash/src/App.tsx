@@ -12,7 +12,8 @@ import {
 } from 'lucide-react';
 import { createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
 import {
-  ADMIN_BOOTSTRAP_EMAIL, adminApi, ApiRequestError, clientApi, isBackendConfigured, publicApi,
+  ADMIN_BOOTSTRAP_EMAIL, adminApi, ApiRequestError, clientApi, isBackendConfigured,
+  PROCEDURE_IMAGE_MAX_DATA_URL_CHARS, PROCEDURE_IMAGE_MAX_FILE_BYTES, publicApi,
   type Appointment, type AppointmentStatus, type AvailabilitySlot, type BlockedDate,
   type BusinessHours, type BusinessSettings, type ClientProfile, type DashboardSummary,
   type PaymentStatus, type Procedure, type ProcedureInput, type SitePayload,
@@ -32,6 +33,47 @@ function money(cents: number) {
 function currencyCents(value: string) {
   return Number(value.replace(/\D/g, '') || 0);
 }
+async function compressProcedureImage(file: File): Promise<string> {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error('Escolha uma imagem JPG, PNG ou WebP.');
+  }
+  if (file.size > PROCEDURE_IMAGE_MAX_FILE_BYTES) {
+    throw new Error('A imagem original precisa ter no máximo 10 MB.');
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const loadedImage = new Image();
+      loadedImage.onload = () => resolve(loadedImage);
+      loadedImage.onerror = () => reject(new Error('Não foi possível abrir esta imagem.'));
+      loadedImage.src = objectUrl;
+    });
+    let scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Não foi possível preparar a imagem neste navegador.');
+      context.fillStyle = '#faf7f4';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      for (let quality = 0.86; quality >= 0.5; quality -= 0.08) {
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length <= PROCEDURE_IMAGE_MAX_DATA_URL_CHARS) return dataUrl;
+      }
+      scale *= 0.82;
+    }
+
+    throw new Error('Não foi possível preparar esta imagem. Tente uma imagem menor.');
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => reject(new Error(message)), milliseconds);
@@ -42,7 +84,12 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: stri
   });
 }
 function dateLabel(value: string, opts: Intl.DateTimeFormatOptions = {}) {
-  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', ...opts }).format(new Date(value));
+  const hasDateParts = [opts.era, opts.year, opts.month, opts.day, opts.weekday]
+    .some(option => option !== undefined);
+  return new Intl.DateTimeFormat('pt-BR', {
+    ...(!hasDateParts ? { dateStyle: 'medium' as const } : {}),
+    ...opts,
+  }).format(new Date(value));
 }
 function timeLabel(value: string) {
   return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
@@ -230,12 +277,12 @@ function BookingPage({ procedures, site, profile, loading: proceduresLoading, pu
       <div className="booking-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 315px', gap: 24, alignItems: 'start' }}>
         <div className="surface" style={{ padding: 'clamp(18px,4vw,34px)' }}>
           <div className="step-title"><span>1</span><div><b>Escolha o procedimento</b><small>Encontre a técnica que tem a sua cara.</small></div></div>
-          {proceduresLoading ? <LoadingBlock rows={2} /> : publicError ? <div className="notice error">{publicError}</div> : procedures.filter(p => p.active).length === 0 ? <div className="notice">Nenhum procedimento ativo está disponível no momento.</div> : <div className="procedure-options">{procedures.filter(p => p.active).map(p => <button key={p.id} type="button" className={`procedure-option ${procedureId === p.id ? 'selected' : ''}`} onClick={() => setProcedureId(p.id)} data-testid={`select-procedure-${p.id}`}><span className="select-dot">{procedureId === p.id && <Check size={13} />}</span><span style={{ flex: 1, textAlign: 'left' }}><b>{p.name}</b><small>{p.durationMinutes} min</small></span><strong>{money(p.priceCents)}</strong></button>)}</div>}
+          {proceduresLoading ? <LoadingBlock rows={2} /> : publicError ? <div className="notice error">{publicError}</div> : procedures.filter(p => p.active).length === 0 ? <div className="notice">Nenhum procedimento ativo está disponível no momento.</div> : <div className="procedure-options">{procedures.filter(p => p.active).map(p => <button key={p.id} type="button" className={`procedure-option ${procedureId === p.id ? 'selected' : ''}`} onClick={() => { if (procedureId !== p.id) { setProcedureId(p.id); setSlots([]); setSelected(''); setError(''); setLoading(true); } }} data-testid={`select-procedure-${p.id}`}><span className="select-dot">{procedureId === p.id && <Check size={13} />}</span><span style={{ flex: 1, textAlign: 'left' }}><b>{p.name}</b><small>{p.durationMinutes} min</small></span><strong>{money(p.priceCents)}</strong></button>)}</div>}
           <div className="thin-rule" style={{ margin: '27px 0' }} />
           <div className="step-title"><span>2</span><div><b>Dia e horário</b><small>Os horários são atualizados em tempo real.</small></div></div>
           <label className="field" style={{ maxWidth: 250, margin: '18px 0 20px' }}>Escolha um dia<input type="date" value={date} min={localDateValue()} onChange={e => setDate(e.target.value)} data-testid="input-booking-date" /></label>
           {!procedureId ? <div className="empty-slot"><CalendarDays size={20} /><span>Escolha um procedimento para ver os horários.</span></div> : loading ? <LoadingBlock rows={2} /> : error ? <div className="notice error">{error} <button className="text-link" onClick={() => setAvailabilityAttempt(value => value + 1)}>Tentar novamente</button></div> : slots.length === 0 ? <div className="empty-slot"><CalendarDays size={20} /><span>Não há horários disponíveis para este dia. Experimente outra data.</span></div> :
-            <div className="slot-list">{slots.map(slot => <button type="button" key={slot.startAt} onClick={() => setSelected(slot.startAt)} className={`slot ${selected === slot.startAt ? 'chosen' : ''}`} data-testid={`slot-${slot.startAt}`}><Clock3 size={14} />{timeLabel(slot.startAt)}</button>)}</div>}
+            <div className="slot-list">{slots.map(slot => <button type="button" key={slot.startAt} onClick={() => setSelected(slot.startAt)} className={`slot ${selected === slot.startAt ? 'chosen' : ''}`} data-testid={`slot-${slot.startAt}`}><Clock3 size={14} />{timeLabel(slot.startAt)}–{timeLabel(slot.endAt)}</button>)}</div>}
         </div>
         <aside className="surface summary-card">
           <div className="eyebrow">SEU RESUMO</div><h2 className="serif" style={{ color: '#503343', fontWeight: 400, fontSize: 27, margin: '8px 0 20px' }}>Quase lá.</h2>
@@ -354,6 +401,7 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
   const [adminProcedures, setAdminProcedures] = useState<Procedure[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [procedureForm, setProcedureForm] = useState<ProcedureInput | null>(null);
+  const [procedureImageBusy, setProcedureImageBusy] = useState(false);
   const [settingsForm, setSettingsForm] = useState<BusinessSettings | null>(site?.business || null);
   const [hours, setHours] = useState<BusinessHours[]>(dayNames.map(([dayId]) => ({ dayId, enabled: false, periods: [{ start: '09:00', end: '17:00' }] })));
   const [blocked, setBlocked] = useState<BlockedDate[]>([]);
@@ -446,8 +494,24 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
       setNotice('Reserva atualizada.');
     } catch (e) { setError(errorText(e)); }
   }
+  async function chooseProcedureImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    setProcedureImageBusy(true);
+    setError('');
+    try {
+      const imageUrl = await compressProcedureImage(file);
+      setProcedureForm(current => current ? { ...current, imageUrl } : current);
+      setNotice('Imagem otimizada e pronta para salvar no procedimento.');
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setProcedureImageBusy(false);
+    }
+  }
   async function saveProcedure(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!procedureForm) return;
+    event.preventDefault(); if (!procedureForm || procedureImageBusy) return;
     setBusy(true); setError(''); setNotice('');
     try {
       const saved = await adminApi.saveProcedure(await adminToken(), procedureForm);
@@ -530,20 +594,22 @@ function AdminPage({ site, onSiteChange }: { site: SitePayload | null; onSiteCha
       <div className="overview-list surface" style={{ marginTop: 18, padding: 23 }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}><div><div className="eyebrow">O QUE VEM A SEGUIR</div><h2 className="serif" style={{ margin: '5px 0 0', color: '#503343', fontWeight: 400, fontSize: 24 }}>Próximos atendimentos</h2></div><button className="button button-quiet" onClick={() => setTab('appointments')} style={{ minHeight: 38, fontSize: 10 }}>Ver agenda <ArrowRight size={13} /></button></div>
       {summary.nextAppointments.length === 0 ? <div className="empty-admin"><CalendarDays size={20} /><span>Nenhum próximo atendimento na agenda.</span></div> : summary.nextAppointments.map(a => <AppointmentAdminRow key={a.id} appointment={a} onUpdate={updateAppointment} />)}</div></>}
     </section> : tab === 'appointments' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,26px)' }}><div className="admin-section-head"><div><div className="eyebrow">AGENDA</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 0' }}>Reservas</h2></div><label className="field" style={{ width: 185 }}>Filtrar por dia<input type="date" value={appointmentFilter} onChange={e => setAppointmentFilter(e.target.value)} /></label></div>{adminLoading ? <LoadingBlock /> : filteredAppointments.length === 0 ? <div className="empty-admin"><CalendarDays size={22} /><span>{appointmentFilter ? 'Não há reservas para este dia.' : 'Sua agenda ainda está vazia.'}</span></div> : filteredAppointments.map(a => <AppointmentAdminRow key={a.id} appointment={a} onUpdate={updateAppointment} />)}</section> :
-    tab === 'procedures' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,26px)' }}><div className="admin-section-head"><div><div className="eyebrow">CARDÁPIO DE CUIDADOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 0' }}>Procedimentos</h2></div><button className="button" onClick={() => setProcedureForm({ name: '', description: '', priceCents: 0, durationMinutes: 60, active: true })}><Plus size={15} /> Novo procedimento</button></div>
+    tab === 'procedures' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,26px)' }}><div className="admin-section-head"><div><div className="eyebrow">CARDÁPIO DE CUIDADOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 0' }}>Procedimentos</h2></div><button className="button" disabled={procedureImageBusy} onClick={() => setProcedureForm({ name: '', description: '', priceCents: 0, durationMinutes: 60, active: true })}><Plus size={15} /> Novo procedimento</button></div>
       {procedureForm && <form onSubmit={saveProcedure} className="procedure-edit">
-        <div className="admin-section-head"><b style={{ color: '#624252' }}>{procedureForm.id ? 'Editar procedimento' : 'Novo procedimento'}</b><button type="button" className="icon-button" aria-label="Fechar formulário" onClick={() => setProcedureForm(null)}><X size={16} /></button></div>
+        <div className="admin-section-head"><b style={{ color: '#624252' }}>{procedureForm.id ? 'Editar procedimento' : 'Novo procedimento'}</b><button type="button" className="icon-button" aria-label="Fechar formulário" disabled={procedureImageBusy} onClick={() => setProcedureForm(null)}><X size={16} /></button></div>
         <div className="edit-grid">
           <label className="field">Nome<input required value={procedureForm.name} onChange={e => setProcedureForm({ ...procedureForm, name: e.target.value })} /></label>
           <label className="field">Valor (R$)<input required type="text" inputMode="numeric" autoComplete="off" value={money(procedureForm.priceCents)} onChange={e => setProcedureForm({ ...procedureForm, priceCents: currencyCents(e.target.value) })} /></label>
           <label className="field">Duração (min)<input required type="number" min="1" value={procedureForm.durationMinutes} onChange={e => setProcedureForm({ ...procedureForm, durationMinutes: Number(e.target.value) })} /></label>
-          <label className="field">Imagem (URL, opcional)<input type="url" value={procedureForm.imageUrl || ''} onChange={e => setProcedureForm({ ...procedureForm, imageUrl: e.target.value || undefined })} /></label>
+          <label className="field">Enviar imagem (JPG, PNG ou WebP)<input type="file" accept="image/jpeg,image/png,image/webp" disabled={procedureImageBusy || busy} onChange={event => void chooseProcedureImage(event)} data-testid="input-procedure-image" /><small style={{ color: '#927c86', fontWeight: 400 }}>Limite: 10 MB.{procedureImageBusy ? ' Preparando imagem…' : ''}</small></label>
+          {procedureForm.imageUrl && <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}><img src={procedureForm.imageUrl} alt="Prévia do procedimento" style={{ width: 150, height: 100, objectFit: 'cover', borderRadius: 6, border: '1px solid #eadfe2' }} /><button type="button" className="text-link" disabled={procedureImageBusy || busy} onClick={() => setProcedureForm({ ...procedureForm, imageUrl: undefined })}>Remover imagem</button></div>}
+          {!procedureForm.imageUrl?.startsWith('data:image/') && <label className="field">Ou endereço da imagem (opcional)<input type="url" value={procedureForm.imageUrl || ''} onChange={e => setProcedureForm({ ...procedureForm, imageUrl: e.target.value || undefined })} /></label>}
           <label className="field" style={{ gridColumn: '1/-1' }}>Descrição<textarea required value={procedureForm.description} onChange={e => setProcedureForm({ ...procedureForm, description: e.target.value })} /></label>
           <label style={{ display: 'flex', gap: 9, alignItems: 'center', color: '#6c4d5c', fontSize: 12 }}><input type="checkbox" checked={procedureForm.active} onChange={e => setProcedureForm({ ...procedureForm, active: e.target.checked })} />Disponível para agendamento</label>
         </div>
-        <button className="button" disabled={busy} style={{ marginTop: 16 }}>{busy ? 'Salvando…' : 'Salvar procedimento'}</button>
+        <button className="button" disabled={busy || procedureImageBusy} style={{ marginTop: 16 }}>{procedureImageBusy ? 'Preparando imagem…' : busy ? 'Salvando…' : 'Salvar procedimento'}</button>
       </form>}
-      {procedures.length === 0 ? <div className="empty-admin"><Scissors size={22} /><span>Nenhum procedimento carregado. Cadastre o primeiro ou recarregue o painel.</span><button className="text-link" onClick={() => void loadAdmin()}>Atualizar</button></div> : <div className="admin-procedures">{procedures.map(p => <div className="admin-procedure" key={p.id}><div><b>{p.name}</b><p>{p.description}</p><span>{money(p.priceCents)} · {p.durationMinutes} min · {p.active ? 'Ativo' : 'Inativo'}</span></div><div style={{ display: 'flex', gap: 7 }}><button className="icon-button" aria-label={`Editar ${p.name}`} onClick={() => setProcedureForm({ ...p })}><Scissors size={15} /></button><button className="icon-button" aria-label={`Remover ${p.name}`} onClick={() => void deleteProcedure(p)}><Trash2 size={15} /></button></div></div>)}</div>}</section> :
+      {procedures.length === 0 ? <div className="empty-admin"><Scissors size={22} /><span>Nenhum procedimento carregado. Cadastre o primeiro ou recarregue o painel.</span><button className="text-link" onClick={() => void loadAdmin()}>Atualizar</button></div> : <div className="admin-procedures">{procedures.map(p => <div className="admin-procedure" key={p.id}><div><b>{p.name}</b><p>{p.description}</p><span>{money(p.priceCents)} · {p.durationMinutes} min · {p.active ? 'Ativo' : 'Inativo'}</span></div><div style={{ display: 'flex', gap: 7 }}><button className="icon-button" aria-label={`Editar ${p.name}`} disabled={procedureImageBusy} onClick={() => setProcedureForm({ ...p })}><Scissors size={15} /></button><button className="icon-button" aria-label={`Remover ${p.name}`} onClick={() => void deleteProcedure(p)}><Trash2 size={15} /></button></div></div>)}</div>}</section> :
     tab === 'settings' ? <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">IDENTIDADE E PAGAMENTOS</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 20px' }}>Configurações do estúdio</h2>{settingsForm ? <form onSubmit={saveSettings} className="edit-grid"><label className="field">Nome do estúdio<input required value={settingsForm.businessName} onChange={e => setSettingsForm({ ...settingsForm, businessName: e.target.value })} /></label><label className="field">WhatsApp<input required value={settingsForm.whatsapp} onChange={e => setSettingsForm({ ...settingsForm, whatsapp: e.target.value })} /></label><label className="field">Chave PIX<input required value={settingsForm.pixKey} onChange={e => setSettingsForm({ ...settingsForm, pixKey: e.target.value })} /></label><label className="field">Recebedor PIX<input required value={settingsForm.pixReceiver} onChange={e => setSettingsForm({ ...settingsForm, pixReceiver: e.target.value })} /></label><label className="field" style={{ gridColumn: '1/-1' }}>Endereço<input required value={settingsForm.address} onChange={e => setSettingsForm({ ...settingsForm, address: e.target.value })} /></label><label className="field">Fuso horário<input required value={settingsForm.timezone} onChange={e => setSettingsForm({ ...settingsForm, timezone: e.target.value })} /></label><label className="field">Sinal de reserva (R$)<input required type="number" min="0" step=".01" value={settingsForm.depositCents / 100} onChange={e => setSettingsForm({ ...settingsForm, depositCents: Math.round(Number(e.target.value) * 100) })} /></label><button className="button" disabled={busy} style={{ gridColumn: '1/-1', justifySelf: 'start' }}>{busy ? 'Salvando…' : 'Salvar configurações'} <Check size={15} /></button></form> : <div className="notice">As configurações do estúdio não foram carregadas. Verifique a conexão e tente novamente.</div>}</section> :
      <section className="surface" style={{ padding: 'clamp(16px,3vw,28px)' }}><div className="eyebrow">DISPONIBILIDADE</div><h2 className="serif" style={{ color: '#503343', fontSize: 27, fontWeight: 400, margin: '5px 0 6px' }}>Horários e bloqueios</h2><p style={{ color: '#8b747e', fontSize: 11, lineHeight: 1.6 }}>Configure os períodos de atendimento e os bloqueios da agenda. As alterações são sincronizadas com as reservas online.</p>
       <div className="hours-list">{hours.map((day, index) => <div className="hours-row" key={day.dayId}><label style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 150, fontSize: 12, color: '#684957' }}><input type="checkbox" checked={day.enabled} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, enabled: e.target.checked } : item))} />{dayNames[index][1]}</label>{day.enabled ? <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input aria-label={`Início ${dayNames[index][1]}`} type="time" value={day.periods[0]?.start || '09:00'} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, periods: [{ ...item.periods[0], start: e.target.value, end: item.periods[0]?.end || '17:00' }] } : item))} /><span>até</span><input aria-label={`Fim ${dayNames[index][1]}`} type="time" value={day.periods[0]?.end || '17:00'} onChange={e => setHours(prev => prev.map((item, i) => i === index ? { ...item, periods: [{ ...item.periods[0], start: item.periods[0]?.start || '09:00', end: e.target.value }] } : item))} /></div> : <span style={{ color: '#aa969e', fontSize: 11 }}>Fechado</span>}</div>)}</div>

@@ -117,6 +117,9 @@ export type BlockedDate = {
 
 export type ProcedureInput = Omit<Procedure, "id"> & { id?: string };
 
+export const PROCEDURE_IMAGE_MAX_DATA_URL_CHARS = 650_000;
+export const PROCEDURE_IMAGE_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
 export type ClientRegistration = {
   firstName: string;
   lastName: string;
@@ -450,6 +453,10 @@ export const publicApi = {
       throw new ApiRequestError("Procedimento indisponível.", 404);
     }
     const procedure = getProcedure(procedureSnap.data(), procedureSnap.id);
+    const durationMinutes = procedure.durationMinutes;
+    if (!Number.isInteger(durationMinutes) || durationMinutes <= 0) {
+      throw new ApiRequestError("A duração deste procedimento está inválida.", 400);
+    }
     if (!hoursSnap.exists() || hoursSnap.data().enabled !== true) return [];
     const periods = Array.isArray(hoursSnap.data().periods)
       ? (hoursSnap.data().periods as BusinessHourPeriod[])
@@ -462,14 +469,15 @@ export const publicApi = {
       const open = timeMinutes(period.start);
       const close = timeMinutes(period.end);
       if (close <= open) continue;
-      for (let minute = open; minute + procedure.durationMinutes <= close; minute += 15) {
+      const stepMinutes = Math.ceil(durationMinutes / 15) * 15;
+      for (let minute = open; minute + durationMinutes <= close; minute += stepMinutes) {
         const startAt = localTimeToDate(
           date,
           `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`,
           settings.timezone,
         );
         if (startAt.getTime() <= Date.now()) continue;
-        const keys = slotKeys(startAt, procedure.durationMinutes);
+        const keys = slotKeys(startAt, durationMinutes);
         const busy = keys.some((key) => {
           const lock = locks.get(key);
           if (!lock) return false;
@@ -485,7 +493,7 @@ export const publicApi = {
           slots.push({
             startAt: startAt.toISOString(),
             endAt: new Date(
-              startAt.getTime() + procedure.durationMinutes * 60_000,
+              startAt.getTime() + durationMinutes * 60_000,
             ).toISOString(),
           });
         }
@@ -645,6 +653,10 @@ export const clientApi = {
         throw new ApiRequestError("Não há atendimento disponível nessa data.", 409);
       }
       const procedure = getProcedure(procedureSnap.data(), procedureSnap.id);
+      const durationMinutes = procedure.durationMinutes;
+      if (!Number.isInteger(durationMinutes) || durationMinutes <= 0) {
+        throw new ApiRequestError("A duração deste procedimento está inválida.", 400);
+      }
       const currentSettings = {
         ...DEFAULT_BUSINESS,
         ...(settingsSnap.data() ?? {}),
@@ -657,12 +669,12 @@ export const clientApi = {
       const withinPeriod = periods.some(
         (period) =>
           requestedMinute >= timeMinutes(period.start) &&
-          requestedMinute + procedure.durationMinutes <= timeMinutes(period.end),
+          requestedMinute + durationMinutes <= timeMinutes(period.end),
       );
       if (!withinPeriod) {
         throw new ApiRequestError("Esse horário está fora do funcionamento.", 409);
       }
-      const lockIds = slotKeys(requestedStart, procedure.durationMinutes);
+      const lockIds = slotKeys(requestedStart, durationMinutes);
       const lockRefs = lockIds.map((id) => doc(database, "availabilityLocks", id));
       const lockSnapshots = await Promise.all(
         lockRefs.map((reference) => transaction.get(reference)),
@@ -685,7 +697,6 @@ export const clientApi = {
         priceCents,
         Math.max(0, Number(currentSettings.depositCents) || 0),
       );
-      const durationMinutes = procedure.durationMinutes;
       const expiresAt = Timestamp.fromMillis(now + 30 * 60_000);
       created = {
         clientId: user.uid,
@@ -910,21 +921,53 @@ export const adminApi = {
 
   async saveProcedure(uid: string, input: ProcedureInput): Promise<Procedure> {
     await requireAdmin(uid);
+    if (!Number.isInteger(input.durationMinutes) || input.durationMinutes <= 0) {
+      throw new ApiRequestError(
+        "Informe a duração do procedimento em minutos inteiros.",
+        400,
+      );
+    }
+    const imageUrl = input.imageUrl || undefined;
+    if (imageUrl && imageUrl.length > PROCEDURE_IMAGE_MAX_DATA_URL_CHARS) {
+      throw new ApiRequestError(
+        "A imagem ficou grande demais para salvar. Escolha outra imagem.",
+        413,
+      );
+    }
+    if (
+      imageUrl?.startsWith("data:") &&
+      !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]*$/.test(imageUrl)
+    ) {
+      throw new ApiRequestError(
+        "A imagem enviada não está em um formato aceito.",
+        400,
+      );
+    }
     const database = requireFirestore();
     const { id, ...data } = input;
     const reference = id
       ? doc(database, "procedures", id)
       : doc(collection(database, "procedures"));
+    const imageField =
+      imageUrl !== undefined
+        ? { imageUrl }
+        : id
+          ? { imageUrl: deleteField() }
+          : {};
     await setDoc(
       reference,
       {
         ...data,
+        ...imageField,
         updatedAt: serverTimestamp(),
         ...(!id ? { createdAt: serverTimestamp() } : {}),
       },
       { merge: true },
     );
-    return getProcedure({ ...data }, reference.id);
+    return getProcedure(
+      { ...data, ...(imageUrl ? { imageUrl } : {}) },
+      reference.id,
+    );
   },
 
   async deleteProcedure(uid: string, procedureId: string): Promise<void> {
